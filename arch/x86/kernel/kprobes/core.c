@@ -52,6 +52,7 @@
 #include <linux/ftrace.h>
 #include <linux/frame.h>
 #include <linux/kasan.h>
+#include <linux/moduleloader.h>
 
 #include <asm/text-patching.h>
 #include <asm/cacheflush.h>
@@ -417,6 +418,14 @@ static void prepare_boost(struct kprobe *p, struct insn *insn)
 	}
 }
 
+/* Recover page to RW mode before releasing it */
+void free_insn_page(void *page)
+{
+	set_memory_nx((unsigned long)page & PAGE_MASK, 1);
+	set_memory_rw((unsigned long)page & PAGE_MASK, 1);
+	module_memfree(page);
+}
+
 static int arch_copy_kprobe(struct kprobe *p)
 {
 	struct insn insn;
@@ -448,6 +457,8 @@ static int arch_copy_kprobe(struct kprobe *p)
 
 int arch_prepare_kprobe(struct kprobe *p)
 {
+	int ret;
+
 	if (alternatives_text_reserved(p->addr, p->addr))
 		return -EINVAL;
 
@@ -458,7 +469,13 @@ int arch_prepare_kprobe(struct kprobe *p)
 	if (!p->ainsn.insn)
 		return -ENOMEM;
 
-	return arch_copy_kprobe(p);
+	ret = arch_copy_kprobe(p);
+	if (ret) {
+		free_insn_slot(p->ainsn.insn, 0);
+		p->ainsn.insn = NULL;
+	}
+
+	return ret;
 }
 
 void arch_arm_kprobe(struct kprobe *p)
